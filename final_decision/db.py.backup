@@ -1,0 +1,124 @@
+import sqlite3
+import json
+import threading
+from datetime import datetime
+
+DB_PATH = "incidents.db"
+_lock = threading.Lock()
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS incidents (
+    incident_id TEXT PRIMARY KEY,
+    timestamp TEXT,
+    created_at TEXT,
+    hostname TEXT,
+    agent_id TEXT,
+    platform TEXT,
+    incident_type TEXT,
+    rule_id TEXT,
+    rule_level INTEGER,
+    description TEXT,
+    classification_confidence REAL,
+    classification_severity TEXT,
+    classification_source TEXT,
+    priority TEXT,
+    ioc_total INTEGER,
+    ioc_hashes INTEGER,
+    ioc_ips INTEGER,
+    ioc_domains INTEGER,
+    ioc_urls INTEGER,
+    decision_engine_score REAL,
+    decision_engine_details TEXT,
+    misp_score REAL,
+    misp_risk TEXT,
+    misp_statistics TEXT,
+    cortex_score REAL,
+    cortex_risk TEXT,
+    cortex_statistics TEXT,
+    malicious_iocs INTEGER,
+    final_score REAL,
+    decision TEXT,
+    risk_level TEXT,
+    response_required INTEGER,
+    label TEXT,
+    label_source TEXT,
+    labeled_at TEXT
+);
+"""
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(SCHEMA)
+        conn.commit()
+    print("[DB] incidents.db prête.")
+
+def save_incident(normalized: dict, risk: dict, decision: dict):
+    """Appelé à chaque /finalize, une fois risk + decision calculés."""
+
+    classification = normalized.get("classification", {}) or {}
+    ioc_stats = normalized.get("ioc_statistics", {}) or {}
+
+    de = risk.get("decision_engine", {}) or {}
+    misp = risk.get("misp", {}) or {}
+    cortex = risk.get("cortex", {}) or {}
+
+    row = (
+        normalized.get("incident_id"),
+        normalized.get("timestamp"),
+        datetime.utcnow().isoformat(),
+        normalized.get("hostname"),
+        normalized.get("agent_id"),
+        normalized.get("platform"),
+        normalized.get("incident_type"),
+        normalized.get("rule_id"),
+        normalized.get("rule_level"),
+        normalized.get("description"),
+        classification.get("confidence"),
+        classification.get("severity"),
+        classification.get("source"),
+        (normalized.get("investigation_plan") or {}).get("priority"),
+        ioc_stats.get("total", 0),
+        ioc_stats.get("hashes", 0),
+        ioc_stats.get("ips", 0),
+        ioc_stats.get("domains", 0),
+        ioc_stats.get("urls", 0),
+        de.get("score"),
+        json.dumps(de.get("details", {})),
+        misp.get("score"),
+        misp.get("risk"),
+        json.dumps(misp.get("statistics", {})),
+        cortex.get("score"),
+        cortex.get("risk"),
+        json.dumps(cortex.get("statistics", {})),
+        risk.get("malicious_iocs"),
+        risk.get("final_score"),
+        decision.get("decision"),
+        decision.get("risk"),
+        int(bool(decision.get("response_required"))),
+        None, None, None,
+    )
+
+    with _lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO incidents VALUES
+                (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                row,
+            )
+            conn.commit()
+
+def update_label(incident_id: str, label: str, source: str):
+    with _lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "UPDATE incidents SET label=?, label_source=?, labeled_at=? WHERE incident_id=?",
+                (label, source, datetime.utcnow().isoformat(), incident_id),
+            )
+            conn.commit()
+
+def get_incident(incident_id: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute("SELECT * FROM incidents WHERE incident_id=?", (incident_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
