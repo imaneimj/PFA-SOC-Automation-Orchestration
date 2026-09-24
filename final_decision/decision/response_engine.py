@@ -158,13 +158,14 @@ def build_response(decision,normalized,risk=None,ml_result=None):
         }
 
     if decision=="AUTO_CONTAIN":
-        actions=_build_targeted_actions(
-            incident,
-            platform,
-            hostname,
-            normalized,
-            context
-        )
+        actions=[{
+            "tool":"velociraptor",
+            "action":"run_artifact",
+            "response":"QUARANTINE",
+            "target":hostname,
+            "platform":platform,
+            "context":context
+    }]
         actions.append({
             "tool":"notification",
             "action":"containment_approval",
